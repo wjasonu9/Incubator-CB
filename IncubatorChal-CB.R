@@ -103,6 +103,7 @@ wCB$home=ReviseStr(wCB$home)
 library(dplyr)
 mCB=na.omit(mCB) %>% filter(grepl('\\w+$',home) & halfTime>20)
 wCB=na.omit(wCB) %>% filter(grepl('\\w+$',home) & halfTime>20)
+save(mCB,wCB,file='CBdf.RData')
 getState=function(home){
   mch=regexpr('\\w+$',home)
   return(regmatches(home,m=mch)) }
@@ -134,3 +135,67 @@ TpsMod=Tps(x=AgeTime,Y=ratio)
 viz=predictSurface(TpsMod)
 plot.surface(viz,type='C',xlab='Age',ylab='10 mile time')
 title(main='Smoothed Ratio from Age and 10 Mile Time')
+
+readme=readLines('readme.txt',n=62)
+mch=regexpr('^\\w+',readme[44:62])
+usHeader=regmatches(readme[44:62],m=mch)
+usHeader[8]=paste(usHeader[8],2,sep='')
+us=read.table(file='US.txt',sep='\t',quote="",comment.char="",stringsAsFactors=F) #quote="" disables quoting, o/w the sep character is ignored w/in quotes, eg line 184. comment.char="" disables commenting, o/w it ignores everything beyond the comment char, eg line 207266
+names(us)=usHeader
+us=us %>% filter(feature=='P') %>% mutate(loc=tolower(paste(asciiname,admin1))) %>% select(loc,latitude,longitude)
+sqDist=function(lat1,long1,lat2=38.904722,long2=-77.016389){ #lat2,long2 are for Washington, DC (Wikipedia) by default
+  d1=(lat2-lat1)*6371*pi/180
+  d2=cos((lat1+lat2)*pi/90)*(long2-long1)*6371*pi/180
+  return(d1^2+d2^2) }
+getDist=function(homet){
+  if(grepl('washington dc',homet)) return(0)
+  if(homet=='new york ny') return(374)
+  entry=us %>% filter(loc==homet) %>% slice(1)
+  if(nrow(entry)<1) return(NA)
+  return(sqDist(entry[2],entry[3]) %>% sqrt) }
+mCB=mutate(mCB,dista=Vectorize(getDist)(home),rat=runTime/halfTime)
+wCB=mutate(wCB,dista=Vectorize(getDist)(home),rat=runTime/halfTime)
+temp=sqDist(38.788611,-77.179444) %>% sqrt; mCB$dista[mCB$home=='springfield va']=temp; wCB$dista[wCB$home=='springfield va']=temp
+temp=sqDist(39.016667,-77.216667) %>% sqrt; mCB$dista[mCB$home=='potomac md']=temp; wCB$dista[wCB$home=='potomac md']=temp
+temp=sqDist(40.692778,-73.990728) %>% sqrt; mCB$dista[mCB$home=='brooklyn ny']=temp; wCB$dista[wCB$home=='brooklyn ny']=temp
+save(mCB,wCB,us,file='CBdat.RData')
+smoothScatter(x=wCB$dista,y=wCB$rat)
+ratL=loess(rat~dista,data=wCB) #~17s to run
+abline(h=0,col='red')
+lines(x=0:150*50,y=predict(ratL,newdata=data.frame(dista=0:150*50)),col='green') #loess curve is almost flat at 2
+smoothScatter(x=wCB$dista,y=wCB$runTime,xlim=c(-10,150))
+runL=loess(runTime~dista,data=wCB) #~17s to run
+abline(h=mean(wCB$runTime),col='red')
+lines(x=0:150,y=predict(runL,newdata=data.frame(dista=0:150)),col='green')
+wCB9=wCB[which(wCB$dista>9 & wCB$dista<10),]
+wCB9 %>% group_by(home) %>% summarize(len=n(),dista=mean(dista),mTime=mean(runTime))
+wCB9 %>% filter(home=='arlington va') %>% pull(runTime) %>% summary
+wCBnj=filter(wCB,grepl('nj$',home))
+mean(wCBnj$runTime)
+keyCities=wCB %>% group_by(home) %>% summarize(len=n(),dista=mean(dista),mTime=mean(runTime)) %>% filter(len>199)
+others=c('annapolis md','leesburg va','woodbridge va','herndon va','brooklyn ny')
+keyCities2=wCB %>% filter(home %in% others) %>% group_by(home) %>% summarize(len=n(),dista=mean(dista),mTime=mean(runTime))
+keyCities=union(keyCities,keyCities2) %>% arrange(dista)
+keyCities$dista[c(2:7,10,17,21,23:25)]=c(8.5:12.5,15.5,24,41,59,62:64) #improve spacing for plot
+plotDF=filter(wCB,home %in% keyCities$home) %>% select(home,runTime)
+plotDF$home=factor(plotDF$home,levels=keyCities$home) #ensures boxplots show up in correct order
+boxplot(runTime~home,plotDF,at=keyCities$dista,outpch=16,outcex=0.5,outcol='#00000044',xaxt='n',xlab='distance from DC (km)',ylab='women 10 mile time')
+axis(side=1) #scale of x axis
+text(x=keyCities$dista,y=par("usr")[4]+1,srt=45,pos=4,offset=0,labels=keyCities$home,xpd=T,cex=0.7) #label boxplots, par("usr")[4] is the y value of the top edge of plot
+#mtext(text='distance from DC (km)',side=3,line=2)
+abline(v=61,col='gray')
+lines(x=0:121/2,y=predict(runL,newdata=data.frame(dista=0:121/2)),col='green')
+plotDFm=filter(mCB,home %in% keyCities$home)
+plotDFm$home=factor(plotDFm$home,levels=keyCities$home)
+mTable=plotDFm %>% group_by(home) %>% summarize(len=n(),dista=mean(dista),mTime=mean(runTime)) %>% arrange(dista)
+runLm=loess(runTime~dista,data=mCB)
+boxplot(runTime~home,plotDFm,at=keyCities$dista,outpch=16,outcex=0.5,outcol='#00000044',xaxt='n',xlab='distance from DC (km)',ylab='men 10 mile time')
+axis(side=1) #scale of x axis
+text(x=keyCities$dista,y=par("usr")[4]+1,srt=45,pos=4,offset=0,labels=keyCities$home,xpd=T,cex=0.7)
+abline(v=61,col='gray')
+lines(x=0:121/2,y=predict(runLm,newdata=data.frame(dista=0:121/2)),col='green')
+
+temp=mCB[sample(26429,size=1e3),]
+t=Sys.time()
+ratL=loess(runTime~dista,data=wCB)
+Sys.time()-t
